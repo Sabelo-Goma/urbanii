@@ -1,31 +1,24 @@
-// --- Configuration ---
-const VIDEO_URL = "/video";
-const EVENTS_URL = "/events?limit=20";
-const HEALTH_URL = "/health";
-
-const REFRESH_VIDEO_MS = 300;   // ~3 fps refresh
-const REFRESH_EVENTS_MS = 1000; // poll events every second
-const REFRESH_HEALTH_MS = 3000; // ping backend health
-
-// --- DOM elements ---
-const videoImg = document.getElementById("video-feed");
+const videoFeed = document.getElementById("video-feed");
 const videoError = document.getElementById("video-error");
 
-const statusBadge = document.getElementById("status-badge");
 const fpsLabel = document.getElementById("fps-label");
 const detectionsLabel = document.getElementById("detections-label");
 const classesLabel = document.getElementById("classes-label");
+
 const eventsBody = document.getElementById("events-body");
-const eventsLimitLabel = document.getElementById("events-limit-label");
-const clearEventsBtn = document.getElementById("clear-events");
+const resetBtn = document.getElementById("reset-summary");
+const sceneSelect = document.getElementById("sceneSelect");
+const yearEl = document.getElementById("year");
 
-// --- State ---
-let lastEvents = [];
-let lastFrameTime = null;
+const statusBadge = document.getElementById("status-badge");
 
-// --- Helpers ---
+
+yearEl.textContent = new Date().getFullYear();
+
+let lastFrameTs = 0;
+
+/* ================= STATUS ================= */
 function setStatus(connected) {
-  if (!statusBadge) return;
   if (connected) {
     statusBadge.textContent = "● Connected";
     statusBadge.classList.remove("status-badge--disconnected");
@@ -37,189 +30,98 @@ function setStatus(connected) {
   }
 }
 
-function formatTime(ts) {
-  // ts: unix timestamp (float or int)
-  try {
-    const date = new Date(ts * 1000);
-    return date.toLocaleTimeString();
-  } catch {
-    return "--:--:--";
-  }
-}
+/* ================= VIDEO ================= */
 
-function updateFPSFromEvents(events) {
-  if (!events || events.length < 2) {
-    fpsLabel.textContent = "FPS: --";
-    return;
-  }
-  const first = events[0];
-  const last = events[events.length - 1];
-
-  const df = (last.frame ?? 0) - (first.frame ?? 0);
-  const dt = (last.timestamp ?? 0) - (first.timestamp ?? 0);
-
-  if (df > 0 && dt > 0) {
-    const fps = df / dt;
-    fpsLabel.textContent = `FPS: ${fps.toFixed(1)}`;
-  } else {
-    fpsLabel.textContent = "FPS: --";
-  }
-}
-
-function updateDetectionSummary(events) {
-  if (!events || events.length === 0) {
-    detectionsLabel.textContent = "Detections: 0";
-    classesLabel.textContent = "Classes: --";
-    return;
-  }
-
-  let totalDetections = 0;
-  const classSet = new Set();
-
-  events.forEach((ev) => {
-    const n = ev.num_detections ?? 0;
-    totalDetections += n;
-
-    if (Array.isArray(ev.classes)) {
-      ev.classes.forEach((c) => classSet.add(c));
-    } else if (Array.isArray(ev.detections)) {
-      ev.detections.forEach((d) => {
-        if (d.class_name) classSet.add(d.class_name);
-      });
-    }
-  });
-
-  detectionsLabel.textContent = `Detections: ${totalDetections}`;
-  classesLabel.textContent =
-    classSet.size > 0 ? `Classes: ${Array.from(classSet).join(", ")}` : "Classes: --";
-}
-
-function renderEventsTable(events) {
-  if (!eventsBody) return;
-  eventsBody.innerHTML = "";
-
-  if (!events || events.length === 0) {
-    const row = document.createElement("tr");
-    const cell = document.createElement("td");
-    cell.colSpan = 4;
-    cell.textContent = "No events yet.";
-    cell.className = "events-empty";
-    row.appendChild(cell);
-    eventsBody.appendChild(row);
-    return;
-  }
-
-  events.forEach((ev) => {
-    const row = document.createElement("tr");
-
-    const timeCell = document.createElement("td");
-    timeCell.textContent = formatTime(ev.timestamp ?? 0);
-
-    const frameCell = document.createElement("td");
-    frameCell.textContent = ev.frame ?? "--";
-
-    const numCell = document.createElement("td");
-    numCell.textContent = ev.num_detections ?? 0;
-
-    const classesCell = document.createElement("td");
-    let classesText = "";
-    if (Array.isArray(ev.classes)) {
-      classesText = ev.classes.join(", ");
-    } else if (Array.isArray(ev.detections)) {
-      const cls = ev.detections.map((d) => d.class_name || "?");
-      classesText = cls.join(", ");
-    } else {
-      classesText = "--";
-    }
-    classesCell.textContent = classesText;
-
-    row.appendChild(timeCell);
-    row.appendChild(frameCell);
-    row.appendChild(numCell);
-    row.appendChild(classesCell);
-
-    eventsBody.appendChild(row);
-  });
-}
-
-// --- Polling functions ---
-async function refreshVideo() {
-  if (!videoImg) return;
-
-  // Cache-busting query param so browser fetches fresh frame
-  const url = `${VIDEO_URL}?cache=${Date.now()}`;
-  videoImg.src = url;
-}
-
-async function refreshEvents() {
-  try {
-    const res = await fetch(EVENTS_URL);
-    if (!res.ok) throw new Error("Events fetch failed");
-    const events = await res.json();
-    lastEvents = Array.isArray(events) ? events : [];
-
-    // Update limit label (if backend respects "limit" query)
-    const limitMatch = EVENTS_URL.match(/limit=(\d+)/);
-    if (limitMatch && eventsLimitLabel) {
-      eventsLimitLabel.textContent = limitMatch[1];
-    }
-
-    renderEventsTable(lastEvents);
-    updateFPSFromEvents(lastEvents);
-    updateDetectionSummary(lastEvents);
-  } catch (err) {
-    console.error("Error fetching events:", err);
-  }
-}
-
-async function checkHealth() {
-  try {
-    const res = await fetch(HEALTH_URL);
-    if (res.ok) {
-      setStatus(true);
-    } else {
-      setStatus(false);
-    }
-  } catch (err) {
-    console.warn("Health check failed:", err);
+function refreshVideo() {
+  const img = new Image();
+  img.onload = () => {
+    videoFeed.src = img.src;
+    videoError.classList.add("hidden");
+    setStatus(true);
+  };
+  img.onerror = () => {
+    videoError.classList.remove("hidden");
     setStatus(false);
+  };
+  img.src = `/video?cache=${Date.now()}`;
+}
+
+/* ================= EVENTS ================= */
+
+function refreshEvents() {
+  fetch("/events?limit=20")
+    .then(r => r.json())
+    .then(events => {
+      eventsBody.innerHTML = "";
+
+      let classTotals = {};
+      let totalDetections = 0;
+
+      events.forEach(ev => {
+        totalDetections += ev.num_detections || 0;
+
+        (ev.detections || []).forEach(d => {
+          classTotals[d.class_name] = (classTotals[d.class_name] || 0) + 1;
+        });
+
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>${new Date(ev.timestamp * 1000).toLocaleTimeString()}</td>
+          <td>${ev.frame ?? "-"}</td>
+          <td>${ev.num_detections}</td>
+          <td>${Object.keys(classTotals).join(", ")}</td>
+        `;
+        eventsBody.appendChild(row);
+      });
+
+      detectionsLabel.textContent = `Detections: ${totalDetections}`;
+      classesLabel.textContent =
+        "Classes: " +
+        Object.entries(classTotals)
+          .map(([k, v]) => `${k}(${v})`)
+          .join(" ");
+    });
+}
+
+/* ================= SCENES ================= */
+
+function loadScenes() {
+  fetch("/scenes")
+    .then(r => r.json())
+    .then(data => {
+      sceneSelect.innerHTML = "";
+      Object.entries(data.scenes).forEach(([key, scene]) => {
+        const opt = document.createElement("option");
+        opt.value = key;
+        opt.textContent = scene.label;
+        if (key === data.active) opt.selected = true;
+        sceneSelect.appendChild(opt);
+      });
+    });
+}
+
+sceneSelect.addEventListener("change", async () => {
+  const res = await fetch("/scenes/switch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scene: sceneSelect.value })
+  });
+
+  if (!res.ok) {
+    console.error("Scene switch failed");
   }
-}
-
-// Handle video load / error events
-if (videoImg) {
-  videoImg.addEventListener("load", () => {
-    if (videoError) videoError.classList.add("hidden");
-  });
-  videoImg.addEventListener("error", () => {
-    if (videoError) videoError.classList.remove("hidden");
-  });
-}
-
-// Clear events button
-if (clearEventsBtn) {
-  clearEventsBtn.addEventListener("click", () => {
-    lastEvents = [];
-    renderEventsTable(lastEvents);
-    updateFPSFromEvents(lastEvents);
-    updateDetectionSummary(lastEvents);
-  });
-}
-
-// Footer year
-const yearSpan = document.getElementById("year");
-if (yearSpan) {
-  yearSpan.textContent = new Date().getFullYear().toString();
-}
-
-// --- Kick things off ---
-window.addEventListener("DOMContentLoaded", () => {
-  setStatus(false);
-  refreshVideo();
-  refreshEvents();
-  checkHealth();
-
-  setInterval(refreshVideo, REFRESH_VIDEO_MS);
-  setInterval(refreshEvents, REFRESH_EVENTS_MS);
-  setInterval(checkHealth, REFRESH_HEALTH_MS);
 });
+
+/* ================= RESET ================= */
+
+resetBtn.onclick = () => {
+  eventsBody.innerHTML = "";
+  detectionsLabel.textContent = "Detections: —";
+  classesLabel.textContent = "Classes: —";
+};
+
+/* ================= LOOP ================= */
+
+setInterval(refreshVideo, 500);
+setInterval(refreshEvents, 1000);
+loadScenes();

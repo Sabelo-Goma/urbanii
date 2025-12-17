@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+
+# Virtual environments
+venv/
+.venv/
+*/venv/
+*/.venv/
+
+# YOLO / models
+*.pt
+*.onnx
+*.engine
+
+# Media / streams
+*.mp4
+*.avi
+*.mkv
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Logs
+*.log

@@ -4,12 +4,15 @@
   <meta charset="UTF-8" />
   <title>Urbanii ─ Live Inference Console</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
   <link rel="stylesheet" href="styles.css" />
   <script src="script.js" defer></script>
 </head>
+
 <body>
   <div class="app-shell">
-    <!-- Top Navigation / Brand -->
+
+    <!-- ================= TOP BAR ================= -->
     <header class="top-bar">
       <div class="brand">
         <div class="brand-mark">U</div>
@@ -18,24 +21,34 @@
           <span class="brand-tagline">Edge AI • Urban Intelligence</span>
         </div>
       </div>
+
       <div class="top-status">
         <span id="status-badge" class="status-badge status-badge--disconnected">
           ● Disconnected
         </span>
-        <span id="fps-label" class="metric-pill">FPS: --</span>
-        <span id="detections-label" class="metric-pill">Detections: --</span>
-        <span id="classes-label" class="metric-pill">Classes: --</span>
+
+        <span id="fps-label" class="metric-pill">FPS: —</span>
+        <span id="detections-label" class="metric-pill">Detections: —</span>
+        <span id="classes-label" class="metric-pill">Classes: —</span>
+
+        <div class="scene-select">
+          <label for="sceneSelect">Select live video feed</label>
+          <select id="sceneSelect"></select>
+        </div>
       </div>
     </header>
 
-    <!-- Main Grid: Left video, right events -->
+    <!-- ================= MAIN GRID ================= -->
     <main class="main-grid">
-      <!-- LEFT: Video Stream -->
+
+      <!-- ===== VIDEO PANEL ===== -->
       <section class="panel panel--video">
         <div class="panel-header">
           <div>
             <h2>Live Video Stream</h2>
-            <p class="panel-subtitle">Real-time YOLOv8 detections overlaid on camera feed</p>
+            <p class="panel-subtitle">
+              Real-time YOLOv8 detections overlaid on camera feed
+            </p>
           </div>
           <div class="panel-actions">
             <span class="chip chip--green">YOLOv8n</span>
@@ -47,31 +60,36 @@
           <div class="video-frame">
             <img
               id="video-feed"
-              src=""
-              alt="Urbanii live stream"
               class="video-img"
+              alt="Urbanii live stream"
             />
+
             <div class="video-overlay-corner">
               URBANII • LIVE
             </div>
+
             <div id="video-error" class="video-error hidden">
-              No video frames yet.  
-              <span class="video-error-sub">Check inference script and backend /video endpoint.</span>
+              Stream unavailable
+              <span class="video-error-sub">
+                Waiting for inference node…
+              </span>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- RIGHT: Recent Detection Events -->
+      <!-- ===== EVENTS PANEL ===== -->
       <section class="panel panel--events">
         <div class="panel-header">
           <div>
             <h2>Recent Detection Events</h2>
             <p class="panel-subtitle">
-              Last <span id="events-limit-label">20</span> events from /events
+              Latest inference metadata
             </p>
           </div>
-          <button id="clear-events" class="ghost-button">Clear view</button>
+          <button id="reset-summary" class="control-button">
+            reset summary
+          </button>
         </div>
 
         <div class="events-table-wrapper">
@@ -79,26 +97,28 @@
             <thead>
               <tr>
                 <th>Time</th>
-                <th>Frame #</th>
-                <th>Detections</th>
+                <th>Frame</th>
+                <th>Objects</th>
                 <th>Classes</th>
               </tr>
             </thead>
-            <tbody id="events-body">
-              <!-- Rows injected by script.js -->
-            </tbody>
+            <tbody id="events-body"></tbody>
           </table>
         </div>
       </section>
+
     </main>
 
-    <!-- Footer -->
+    <!-- ================= FOOTER ================= -->
     <footer class="footer">
-      <span>© <span id="year"></span> Quarisme AI • Urbanii Prototype Node</span>
+      <span>
+        © <span id="year"></span> Quarisme AI • Urbanii Prototype Node
+      </span>
       <span class="footer-right">
         Backend: <code>FastAPI</code> • Model: <code>YOLOv8n</code>
       </span>
     </footer>
+
   </div>
 </body>
 </html>

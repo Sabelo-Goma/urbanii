@@ -1,232 +1,199 @@
-import subprocess
-import time
 import cv2
-import numpy as np
+import time
 import requests
+import subprocess
 from ultralytics import YOLO
 
-# ---------------------------------------------------------------------
+# =============================================================================
 # CONFIG
-# ---------------------------------------------------------------------
+# =============================================================================
 
-# YouTube live URL (Shibuya / Shinjuku / whatever you’re testing)
-YOUTUBE_URL = "https://www.youtube.com/watch?v=dfVK7ld38Ys"
+BACKEND_URL = "http://localhost:8000"
 
-# Backend endpoints (FastAPI)
-BACKEND_FRAME_URL = "http://localhost:8000/frame"   # POST JSON
-BACKEND_JPEG_URL = "http://localhost:8000/video"    # POST raw JPEG bytes
+FRAME_ENDPOINT = f"{BACKEND_URL}/frame"
+VIDEO_ENDPOINT = f"{BACKEND_URL}/video"
+SCENES_ENDPOINT = f"{BACKEND_URL}/scenes"
 
-# Frame size to read from FFmpeg (after scaling)
-FRAME_WIDTH = 960
-FRAME_HEIGHT = 540
-FRAME_SIZE = FRAME_WIDTH * FRAME_HEIGHT * 3  # 3 channels (BGR)
-
-# YOLO model path
+POLL_INTERVAL = 2.0          # seconds
+JPEG_QUALITY = 80
 MODEL_PATH = "yolov8n.pt"
 
-# ---------------------------------------------------------------------
-# STREAM HELPERS
-# ---------------------------------------------------------------------
+# Logical scene → source mapping
+SCENE_SOURCES = {
+    "shibuya": {
+        "type": "youtube",
+        "url": "https://www.youtube.com/watch?v=dfVK7ld38Ys"
+    },
+    "industrial": {
+        "type": "file",
+        "url": "BigBuckBunny.mp4"
+    },
+    "highway": {
+        "type": "file",
+        "url": "BigBuckBunny.mp4"
+    }
+}
 
+# =============================================================================
+# HELPERS
+# =============================================================================
 
-def open_youtube_stream():
+def resolve_stream(scene_key: str) -> str | None:
     """
-    Start yt-dlp to fetch the live stream and pipe it into ffmpeg,
-    which outputs raw BGR frames to stdout.
-    If the stream dies, we’ll call this again to restart.
+    Resolve a playable stream URL for the active scene.
+    Fail loudly if resolution fails.
     """
-    print("\n[stream] Spawning yt-dlp + ffmpeg pipeline...")
+    source = SCENE_SOURCES.get(scene_key)
 
-    yt_cmd = [
-        "yt-dlp",
-        "--no-cache-dir",
-        "-f", "95/best[ext=mp4]/best",   # prefer 720p HLS, fall back to best
-        "-o", "-",                       # write video data to stdout
-        YOUTUBE_URL,
-    ]
+    if not source:
+        print(f"❌ Scene '{scene_key}' not configured")
+        return None
 
-    ffmpeg_cmd = [
-        "ffmpeg",
-        "-loglevel", "error",
-        "-i", "pipe:0",                  # read from yt-dlp stdout
-        "-f", "rawvideo",
-        "-pix_fmt", "bgr24",
-        "-vf", f"scale={FRAME_WIDTH}:{FRAME_HEIGHT}",
-        "pipe:1",
-    ]
-
-    yt_proc = subprocess.Popen(
-        yt_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-
-    ffmpeg_proc = subprocess.Popen(
-        ffmpeg_cmd,
-        stdin=yt_proc.stdout,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-
-    # Let ffmpeg own the stdout pipe
-    yt_proc.stdout.close()
-
-    return yt_proc, ffmpeg_proc
-
-
-def frame_generator():
-    """
-    Generator that yields raw BGR frame bytes.
-    If the pipeline stops (EOF / error), it will tear down and restart.
-    """
-    while True:
-        yt_proc, ffmpeg_proc = open_youtube_stream()
-
+    if source["type"] == "youtube":
         try:
-            while True:
-                raw = ffmpeg_proc.stdout.read(FRAME_SIZE)
-                if not raw:
-                    print("[stream] No more data from ffmpeg. Restarting in 2s...")
-                    break
-                yield raw
-        finally:
-            try:
-                ffmpeg_proc.kill()
-            except Exception:
-                pass
-            try:
-                yt_proc.kill()
-            except Exception:
-                pass
+            cmd = ["yt-dlp", "-f", "95", "-g", source["url"]]
+            return subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+        except Exception as e:
+            print(f"❌ yt-dlp failed for {scene_key}: {e}")
+            return None
 
-            time.sleep(2)
+    return source["url"]
 
 
-# ---------------------------------------------------------------------
-# DRAWING + BACKEND SYNC
-# ---------------------------------------------------------------------
-
-
-def draw_overlays(frame, detections, fps):
+def get_active_scene() -> str | None:
     """
-    Draw bounding boxes, labels, FPS, and Urbanii branding on frame (in-place).
-    """
-    for det in detections:
-        x1, y1, x2, y2 = map(int, det["bbox"])
-        label = f"{det['class_name']} {det['confidence']:.2f}"
-
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(
-            frame,
-            label,
-            (x1, max(20, y1 - 10)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 255, 0),
-            2,
-        )
-
-    cv2.putText(
-        frame,
-        "URBANII — Live Inference",
-        (10, 30),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1.0,
-        (255, 255, 255),
-        2,
-    )
-
-    cv2.putText(
-        frame,
-        f"FPS: {fps:.2f}",
-        (10, 60),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (255, 255, 0),
-        2,
-    )
-
-    return frame
-
-
-def safe_post(url, **kwargs):
-    """
-    Fire-and-forget POST; log errors but don’t crash the loop.
+    Ask backend which scene is active.
     """
     try:
-        requests.post(url, timeout=0.5, **kwargs)
-    except Exception as e:
-        print(f"[backend] POST to {url} failed: {e}")
+        r = requests.get(SCENES_ENDPOINT, timeout=2)
+        return r.json().get("active")
+    except Exception:
+        return None
 
 
-# ---------------------------------------------------------------------
+# =============================================================================
 # MAIN LOOP
-# ---------------------------------------------------------------------
-
+# =============================================================================
 
 def main():
-    print("[init] Loading YOLOv8n model...")
+    print("Loading YOLO model...")
     model = YOLO(MODEL_PATH)
 
-    gen = frame_generator()
-    frame_idx = 0
-    last_time = time.time()
+    active_scene = None
+    cap = None
+    last_scene_poll = 0
 
-    print("[run] Starting inference loop...")
-    for raw in gen:
-        try:
-            frame = np.frombuffer(raw, np.uint8).reshape(
-                (FRAME_HEIGHT, FRAME_WIDTH, 3)
-            )
-        except ValueError:
-            # Bad frame size – skip and let generator restart if needed
-            print("[stream] Bad frame size, skipping...")
+    while True:
+        now = time.time()
+
+        # ---------------------------------------------------------------------
+        # Poll backend for scene changes
+        # ---------------------------------------------------------------------
+        if now - last_scene_poll > POLL_INTERVAL:
+            scene = get_active_scene()
+            last_scene_poll = now
+
+            if scene and scene != active_scene:
+                print(f"🔁 Switching scene → {scene}")
+
+                if cap:
+                    cap.release()
+                    cap = None
+
+                stream_url = resolve_stream(scene)
+                if not stream_url:
+                    print("❌ No valid stream URL — waiting for operator action")
+                    time.sleep(1)
+                    continue
+
+                cap = cv2.VideoCapture(stream_url)
+                if not cap.isOpened():
+                    print("❌ OpenCV failed to open stream")
+                    cap.release()
+                    cap = None
+                    time.sleep(1)
+                    continue
+
+                active_scene = scene
+
+        if cap is None:
+            time.sleep(0.2)
             continue
 
-        # YOLO inference
-        results = model(frame, verbose=False)
+        # ---------------------------------------------------------------------
+        # Read frame
+        # ---------------------------------------------------------------------
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            print("⚠️ Frame read failed — reconnecting")
+            cap.release()
+            cap = None
+            time.sleep(0.5)
+            continue
+
+        # ---------------------------------------------------------------------
+        # Inference
+        # ---------------------------------------------------------------------
+        results = model(frame, verbose=False)[0]
 
         detections = []
-        for r in results:
-            for box in r.boxes:
-                class_id = int(box.cls[0])
-                detections.append(
-                    {
-                        "class_id": class_id,
-                        "class_name": model.names.get(class_id, str(class_id)),
-                        "confidence": float(box.conf[0]),
-                        "bbox": list(map(float, box.xyxy[0])),
-                    }
-                )
+        class_counts = {}
 
-        # FPS
-        now = time.time()
-        fps = 1.0 / max(now - last_time, 1e-6)
-        last_time = now
+        for box in results.boxes:
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            x1, y1, x2, y2 = map(float, box.xyxy[0])
 
-        annotated = draw_overlays(frame.copy(), detections, fps)
+            cls_name = model.names[cls_id]
+            class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
 
-        # Send JSON event to backend
-        safe_post(
-            BACKEND_FRAME_URL,
-            json={
-                "frame": frame_idx,
-                "timestamp": now,
-                "num_detections": len(detections),
-                "detections": detections,
-            },
-        )
+            detections.append({
+                "class_id": cls_id,
+                "class_name": cls_name,
+                "confidence": conf,
+                "bbox": [x1, y1, x2, y2]
+            })
 
-        # Encode JPEG and send to backend
-        ok, jpeg = cv2.imencode(".jpg", annotated)
-        if ok:
-            safe_post(
-                BACKEND_JPEG_URL,
-                data=jpeg.tobytes(),
-                headers={"Content-Type": "image/jpeg"},
+        payload = {
+            "scene": active_scene,
+            "timestamp": time.time(),
+            "num_detections": len(detections),
+            "classes": class_counts,
+            "detections": detections
+        }
+
+        try:
+            requests.post(FRAME_ENDPOINT, json=payload, timeout=1)
+        except Exception:
+            pass
+
+        # ---------------------------------------------------------------------
+        # Draw + send frame
+        # ---------------------------------------------------------------------
+        for d in detections:
+            x1, y1, x2, y2 = map(int, d["bbox"])
+            label = f"{d['class_name']} {d['confidence']:.2f}"
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 0), 2)
+            cv2.putText(
+                frame,
+                label,
+                (x1, y1 - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 200, 0),
+                1
             )
 
-        frame_idx += 1
+        try:
+            _, jpeg = cv2.imencode(
+                ".jpg",
+                frame,
+                [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
+            )
+            requests.post(VIDEO_ENDPOINT, data=jpeg.tobytes(), timeout=1)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
