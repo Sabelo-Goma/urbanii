@@ -1,3 +1,5 @@
+/* ================= DOM ================= */
+
 const videoFeed = document.getElementById("video-feed");
 const videoError = document.getElementById("video-error");
 
@@ -16,14 +18,18 @@ const crowdLevelEl = document.getElementById("crowd-level");
 const crowdBarFill = document.getElementById("crowd-bar-fill");
 const crowdTrendEl = document.getElementById("crowd-trend");
 
+const trafficMeter = document.getElementById("traffic-meter");
+const trafficLevelEl = document.getElementById("traffic-level");
+const trafficBarFill = document.getElementById("traffic-bar-fill");
+const trafficTrendEl = document.getElementById("traffic-trend");
+
 const loiteringAlert = document.getElementById("loitering-alert");
 const loiteringDetails = document.getElementById("loitering-details");
 
 yearEl.textContent = new Date().getFullYear();
 
-let activeScene = null;
-
 /* ================= STATUS ================= */
+
 function setStatus(connected) {
   statusBadge.textContent = connected ? "● Connected" : "● Disconnected";
   statusBadge.className =
@@ -32,6 +38,7 @@ function setStatus(connected) {
 }
 
 /* ================= CROWD ================= */
+
 function resetCrowdMeter() {
   crowdLevelEl.textContent = "—";
   crowdLevelEl.className = "crowd-level";
@@ -67,9 +74,14 @@ function updateCrowdMeter(crowd) {
 }
 
 /* ================= LOITERING ================= */
+
 function showLoiteringAlert(loitering) {
+  const count = loitering.subject_count ?? loitering.count ?? 1;
+  const duration = loitering.duration_seconds ?? loitering.duration ?? "?";
+
   loiteringDetails.textContent =
-    `${loitering.subject_count ?? 1} subject(s) stationary for ${loitering.duration_seconds ?? "?"}s`;
+    `${count} subject(s) stationary for ${duration}s`;
+
   loiteringAlert.classList.remove("intel-alert--hidden");
 }
 
@@ -77,7 +89,44 @@ function hideLoiteringAlert() {
   loiteringAlert.classList.add("intel-alert--hidden");
 }
 
+/* ================= TRAFFIC ================= */
+
+function resetTrafficMeter() {
+  trafficLevelEl.textContent = "—";
+  trafficLevelEl.className = "traffic-level";
+  trafficBarFill.style.width = "0%";
+  trafficTrendEl.textContent = "—";
+}
+
+function updateTrafficMeter(traffic) {
+  if (!traffic) return resetTrafficMeter();
+
+  trafficLevelEl.className = "traffic-level";
+
+  if (traffic.density === "low") {
+    trafficLevelEl.textContent = "LOW";
+    trafficLevelEl.classList.add("traffic-level--low");
+    trafficBarFill.style.width = "33%";
+  } else if (traffic.density === "medium") {
+    trafficLevelEl.textContent = "MEDIUM";
+    trafficLevelEl.classList.add("traffic-level--medium");
+    trafficBarFill.style.width = "66%";
+  } else if (traffic.density === "high") {
+    trafficLevelEl.textContent = "HIGH";
+    trafficLevelEl.classList.add("traffic-level--high");
+    trafficBarFill.style.width = "100%";
+  } else {
+    resetTrafficMeter();
+  }
+
+  trafficTrendEl.textContent =
+    traffic.trend === "increasing" ? "↑ Traffic increasing" :
+    traffic.trend === "decreasing" ? "↓ Traffic decreasing" :
+    "→ Traffic stable";
+}
+
 /* ================= VIDEO ================= */
+
 function refreshVideo() {
   const img = new Image();
   img.onload = () => {
@@ -93,6 +142,7 @@ function refreshVideo() {
 }
 
 /* ================= EVENTS ================= */
+
 function refreshEvents() {
   fetch("/events?limit=20")
     .then(r => r.json())
@@ -101,8 +151,12 @@ function refreshEvents() {
 
       let classTotals = {};
       let totalDetections = 0;
+
       let crowdIntel = null;
       let loiteringIntel = null;
+      let trafficIntel = null;
+
+      const scene = sceneSelect.value;
 
       events.forEach(ev => {
         totalDetections += ev.num_detections || 0;
@@ -112,18 +166,18 @@ function refreshEvents() {
             (classTotals[d.class_name] || 0) + 1;
         });
 
-        if (!crowdIntel && ev.intelligence?.crowd) {
+        if (!crowdIntel && ev.intelligence?.crowd)
           crowdIntel = ev.intelligence.crowd;
-        }
 
-        if (!loiteringIntel && ev.intelligence?.loitering?.active) {
+        if (!loiteringIntel && ev.intelligence?.loitering?.active)
           loiteringIntel = ev.intelligence.loitering;
-        }
+
+        if (!trafficIntel && ev.intelligence?.traffic)
+          trafficIntel = ev.intelligence.traffic;
 
         const row = document.createElement("tr");
         row.innerHTML = `
           <td>${new Date(ev.timestamp * 1000).toLocaleTimeString()}</td>
-          <td>${ev.frame ?? "-"}</td>
           <td>${ev.num_detections ?? 0}</td>
           <td>${Object.keys(classTotals).join(", ")}</td>
         `;
@@ -137,27 +191,38 @@ function refreshEvents() {
           .map(([k, v]) => `${k}(${v})`)
           .join(" ");
 
-      // Scene-aware intelligence
-      if (activeScene === "shibuya") {
-        crowdMeter.style.opacity = "1";
+      /* ===== Scene-aware UI ===== */
+
+      // Crowd (Shibuya only)
+      if (scene === "shibuya") {
+        crowdMeter.classList.remove("hidden");
         updateCrowdMeter(crowdIntel);
         loiteringIntel ? showLoiteringAlert(loiteringIntel) : hideLoiteringAlert();
       } else {
-        crowdMeter.style.opacity = "0.35";
+        crowdMeter.classList.add("hidden");
         resetCrowdMeter();
         hideLoiteringAlert();
       }
-    });
+
+      // Traffic (Highway only)
+      if (scene === "highway") {
+        trafficMeter.classList.remove("hidden");
+        updateTrafficMeter(trafficIntel);
+      } else {
+        trafficMeter.classList.add("hidden");
+        resetTrafficMeter();
+      }
+    })
+    .catch(err => console.error("Failed to refresh events", err));
 }
 
 /* ================= SCENES ================= */
+
 function loadScenes() {
   fetch("/scenes")
     .then(r => r.json())
     .then(data => {
-      activeScene = data.active;
       sceneSelect.innerHTML = "";
-
       Object.entries(data.scenes).forEach(([key, scene]) => {
         const opt = document.createElement("option");
         opt.value = key;
@@ -175,22 +240,25 @@ sceneSelect.addEventListener("change", async () => {
     body: JSON.stringify({ scene: sceneSelect.value })
   });
 
-  activeScene = sceneSelect.value;
   eventsBody.innerHTML = "";
   resetCrowdMeter();
+  resetTrafficMeter();
   hideLoiteringAlert();
 });
 
 /* ================= RESET ================= */
+
 resetBtn.onclick = () => {
   eventsBody.innerHTML = "";
   detectionsLabel.textContent = "Detections: —";
   classesLabel.textContent = "Classes: —";
   resetCrowdMeter();
+  resetTrafficMeter();
   hideLoiteringAlert();
 };
 
 /* ================= LOOP ================= */
+
 setInterval(refreshVideo, 500);
 setInterval(refreshEvents, 1000);
 loadScenes();

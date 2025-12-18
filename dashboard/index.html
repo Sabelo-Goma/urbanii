@@ -27,7 +27,6 @@
           ● Disconnected
         </span>
 
-        <span id="fps-label" class="metric-pill">FPS: —</span>
         <span id="detections-label" class="metric-pill">Detections: —</span>
         <span id="classes-label" class="metric-pill">Classes: —</span>
 
@@ -47,11 +46,11 @@
           <div>
             <h2>Live Video Stream</h2>
             <p class="panel-subtitle">
-              Real-time YOLOv8 detections overlaid on camera feed
+              Real-time YOLO detections with scene-aware intelligence
             </p>
           </div>
           <div class="panel-actions">
-            <span class="chip chip--green">YOLOv8n</span>
+            <span class="chip chip--green">YOLO</span>
             <span class="chip chip--blue">Prototype</span>
           </div>
         </div>
@@ -64,9 +63,7 @@
 
             <div id="video-error" class="video-error hidden">
               Stream unavailable
-              <span class="video-error-sub">
-                Waiting for inference node…
-              </span>
+              <span class="video-error-sub">Waiting for inference node…</span>
             </div>
           </div>
 
@@ -84,6 +81,21 @@
             <div id="crowd-trend" class="crowd-trend">—</div>
           </div>
           <!-- ================= /CROWD METER ================= -->
+
+          <!-- ================= TRAFFIC METER ================= -->
+          <div id="traffic-meter" class="traffic-meter hidden">
+            <div class="traffic-label">
+              <span>Traffic Density</span>
+              <span id="traffic-level" class="traffic-level">—</span>
+            </div>
+
+            <div class="traffic-bar">
+              <div id="traffic-bar-fill" class="traffic-bar-fill"></div>
+            </div>
+
+            <div id="traffic-trend" class="traffic-trend">—</div>
+          </div>
+          <!-- ================= /TRAFFIC METER ================= -->
 
         </div>
       </section>
@@ -118,7 +130,6 @@
             <thead>
               <tr>
                 <th>Time</th>
-                <th>Frame</th>
                 <th>Objects</th>
                 <th>Classes</th>
               </tr>
@@ -136,7 +147,7 @@
         © <span id="year"></span> Quarisme AI • Urbanii Prototype Node
       </span>
       <span class="footer-right">
-        Backend: <code>FastAPI</code> • Model: <code>YOLOv8n</code>
+        Backend: <code>FastAPI</code> • Model: <code>YOLO</code>
       </span>
     </footer>
 

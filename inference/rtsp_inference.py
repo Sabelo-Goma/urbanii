@@ -5,6 +5,8 @@ import subprocess
 from ultralytics import YOLO
 from intelligence.crowd import CrowdAnalyzer
 from intelligence.loiter import LoiterAnalyzer
+from intelligence.highway import HighwayAnalyzer
+
 
 # =============================================================================
 # CONFIG
@@ -29,6 +31,8 @@ loiter_analyzer = LoiterAnalyzer(
     max_track_age_seconds=3.0
 )
 
+highway_analyzer = HighwayAnalyzer()
+
 # -----------------------------------------------------------------------------
 # Scene → Source mapping
 # -----------------------------------------------------------------------------
@@ -44,7 +48,7 @@ SCENE_SOURCES = {
     },
     "highway": {
         "type": "file",
-        "url": "BigBuckBunny.mp4"
+        "url": "assets/highway_demo.mp4"
     }
 }
 
@@ -92,10 +96,12 @@ def get_active_scene() -> str | None:
         return r.json().get("scene")
     except Exception:
         return None
-    
+
+
 def _centroid(b):
     x1, y1, x2, y2 = b
     return (x1 + x2) / 2.0, (y1 + y2) / 2.0
+
 
 def _near_miss(person_dets, car_dets, px_threshold=70.0):
     """
@@ -119,6 +125,8 @@ def _near_miss(person_dets, car_dets, px_threshold=70.0):
                     "vehicle_conf": round(float(c["confidence"]), 2),
                 })
     return alerts
+
+
 # =============================================================================
 # MAIN LOOP
 # =============================================================================
@@ -148,7 +156,7 @@ def main():
             scene_changed = scene and scene != active_scene
             hls_expired = (
                 current_stream_url
-                and time.time() - stream_resolved_at > HLS_MAX_AGE
+                and (time.time() - stream_resolved_at > HLS_MAX_AGE)
             )
 
             if scene_changed or hls_expired:
@@ -219,29 +227,49 @@ def main():
             })
 
         # ---------------------------------------------------------------------
-        # Scene-specific intelligence (SHibuya)
+        # Scene-specific intelligence
         # ---------------------------------------------------------------------
-        intelligence = None
+        intelligence = {}
+
+        # === Shibuya: crowd + loitering + lightweight safety ===
         if active_scene == "shibuya":
             _, frame_width = frame.shape[:2]
 
             crowd_intel = crowd_analyzer.analyze(detections, frame_width)
             loiter_intel = loiter_analyzer.analyze(detections, now=time.time())
 
-            # optional lightweight unsafe behaviour: person <-> car proximity
-            persons = [d for d in detections if d["class_name"] == "person" and d["confidence"] > 0.15]
-            cars = [d for d in detections if d["class_name"] in ("car", "truck", "bus", "motorcycle")]
+            persons = [
+                d for d in detections
+                if d["class_name"] == "person" and float(d["confidence"]) > 0.15
+            ]
+            vehicles = [
+                d for d in detections
+                if d["class_name"] in ("car", "truck", "bus", "motorcycle")
+            ]
 
-            conflict_alerts = _near_miss(persons, cars, px_threshold=70.0)
+            conflict_alerts = _near_miss(persons, vehicles, px_threshold=70.0)
 
-            intelligence = {
-                "crowd": crowd_intel,
-                "loitering": loiter_intel,
-                "safety": {
-                    "alerts": conflict_alerts,
-                    "alert_count": len(conflict_alerts)
-                }
+            intelligence["crowd"] = crowd_intel
+            intelligence["loitering"] = loiter_intel
+            intelligence["safety"] = {
+                "alerts": conflict_alerts,
+                "alert_count": len(conflict_alerts)
             }
+
+        # === Highway: traffic analyzer only ===
+        elif active_scene == "highway":
+            frame_height = frame.shape[0]
+            traffic_intel = highway_analyzer.analyze(detections, frame_height)
+            intelligence["traffic"] = traffic_intel
+
+        # === Industrial: placeholder (no extra intelligence yet) ===
+        elif active_scene == "industrial":
+            # keep empty for now
+            pass
+
+        # if nothing was added, keep schema clean
+        if not intelligence:
+            intelligence = None
 
         payload = {
             "scene": active_scene,
@@ -256,7 +284,6 @@ def main():
             requests.post(FRAME_ENDPOINT, json=payload, timeout=1)
         except Exception:
             pass
-
 
         # ---------------------------------------------------------------------
         # Draw + send frame
