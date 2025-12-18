@@ -3,6 +3,8 @@ import time
 import requests
 import subprocess
 from ultralytics import YOLO
+from intelligence.crowd import CrowdAnalyzer
+from intelligence.loiter import LoiterAnalyzer
 
 # =============================================================================
 # CONFIG
@@ -12,13 +14,25 @@ BACKEND_URL = "http://localhost:8000"
 
 FRAME_ENDPOINT = f"{BACKEND_URL}/frame"
 VIDEO_ENDPOINT = f"{BACKEND_URL}/video"
-SCENES_ENDPOINT = f"{BACKEND_URL}/scenes"
+SCENE_ENDPOINT = f"{BACKEND_URL}/scene"   # authoritative for inference
 
-POLL_INTERVAL = 2.0          # seconds
+POLL_INTERVAL = 2.0            # seconds
 JPEG_QUALITY = 80
-MODEL_PATH = "yolov8n.pt"
+MODEL_PATH = "yolov8s.pt"
 
-# Logical scene → source mapping
+HLS_MAX_AGE = 25 * 60          # 25 minutes (YouTube safety window)
+
+crowd_analyzer = CrowdAnalyzer()
+loiter_analyzer = LoiterAnalyzer(
+    loiter_seconds=25.0,        # tweak as needed
+    match_radius_px=60.0,
+    max_track_age_seconds=3.0
+)
+
+# -----------------------------------------------------------------------------
+# Scene → Source mapping
+# -----------------------------------------------------------------------------
+
 SCENE_SOURCES = {
     "shibuya": {
         "type": "youtube",
@@ -40,8 +54,8 @@ SCENE_SOURCES = {
 
 def resolve_stream(scene_key: str) -> str | None:
     """
-    Resolve a playable stream URL for the active scene.
-    Fail loudly if resolution fails.
+    Resolve a playable stream URL for the given scene.
+    YouTube streams are always resolved fresh.
     """
     source = SCENE_SOURCES.get(scene_key)
 
@@ -51,8 +65,17 @@ def resolve_stream(scene_key: str) -> str | None:
 
     if source["type"] == "youtube":
         try:
+            print("🔄 Resolving fresh YouTube HLS URL…")
             cmd = ["yt-dlp", "-f", "95", "-g", source["url"]]
-            return subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+            output = subprocess.check_output(
+                cmd,
+                stderr=subprocess.DEVNULL,
+                timeout=30
+            )
+            return output.decode().strip()
+        except subprocess.TimeoutExpired:
+            print(f"⏱️ yt-dlp timed out while resolving stream for {scene_key}")
+            return None
         except Exception as e:
             print(f"❌ yt-dlp failed for {scene_key}: {e}")
             return None
@@ -65,22 +88,51 @@ def get_active_scene() -> str | None:
     Ask backend which scene is active.
     """
     try:
-        r = requests.get(SCENES_ENDPOINT, timeout=2)
-        return r.json().get("active")
+        r = requests.get(SCENE_ENDPOINT, timeout=2)
+        return r.json().get("scene")
     except Exception:
         return None
+    
+def _centroid(b):
+    x1, y1, x2, y2 = b
+    return (x1 + x2) / 2.0, (y1 + y2) / 2.0
 
-
+def _near_miss(person_dets, car_dets, px_threshold=70.0):
+    """
+    Lightweight 'unsafe interaction' for Shibuya:
+    - If a car centroid is within N pixels of a person centroid -> flag.
+    This is NOT a true collision predictor; it’s a demo-safe heuristic.
+    """
+    alerts = []
+    for p in person_dets:
+        pc = _centroid(p["bbox"])
+        for c in car_dets:
+            cc = _centroid(c["bbox"])
+            dx = pc[0] - cc[0]
+            dy = pc[1] - cc[1]
+            dist = (dx * dx + dy * dy) ** 0.5
+            if dist < px_threshold:
+                alerts.append({
+                    "type": "pedestrian_vehicle_conflict",
+                    "distance_px": round(dist, 1),
+                    "person_conf": round(float(p["confidence"]), 2),
+                    "vehicle_conf": round(float(c["confidence"]), 2),
+                })
+    return alerts
 # =============================================================================
 # MAIN LOOP
 # =============================================================================
 
 def main():
-    print("Loading YOLO model...")
+    print("🚀 Loading YOLO model…")
     model = YOLO(MODEL_PATH)
 
     active_scene = None
     cap = None
+
+    current_stream_url = None
+    stream_resolved_at = 0
+
     last_scene_poll = 0
 
     while True:
@@ -93,8 +145,17 @@ def main():
             scene = get_active_scene()
             last_scene_poll = now
 
-            if scene and scene != active_scene:
-                print(f"🔁 Switching scene → {scene}")
+            scene_changed = scene and scene != active_scene
+            hls_expired = (
+                current_stream_url
+                and time.time() - stream_resolved_at > HLS_MAX_AGE
+            )
+
+            if scene_changed or hls_expired:
+                if scene_changed:
+                    print(f"🔁 Switching scene → {scene}")
+                elif hls_expired:
+                    print("⏳ HLS URL expired — refreshing")
 
                 if cap:
                     cap.release()
@@ -102,7 +163,7 @@ def main():
 
                 stream_url = resolve_stream(scene)
                 if not stream_url:
-                    print("❌ No valid stream URL — waiting for operator action")
+                    print("⚠️ No valid stream URL — retrying")
                     time.sleep(1)
                     continue
 
@@ -115,6 +176,8 @@ def main():
                     continue
 
                 active_scene = scene
+                current_stream_url = stream_url
+                stream_resolved_at = time.time()
 
         if cap is None:
             time.sleep(0.2)
@@ -125,16 +188,17 @@ def main():
         # ---------------------------------------------------------------------
         ret, frame = cap.read()
         if not ret or frame is None:
-            print("⚠️ Frame read failed — reconnecting")
+            print("⚠️ Frame read failed — forcing reconnect")
             cap.release()
             cap = None
+            current_stream_url = None
             time.sleep(0.5)
             continue
 
         # ---------------------------------------------------------------------
         # Inference
         # ---------------------------------------------------------------------
-        results = model(frame, verbose=False)[0]
+        results = model(frame, conf=0.15, verbose=False)[0]
 
         detections = []
         class_counts = {}
@@ -154,18 +218,45 @@ def main():
                 "bbox": [x1, y1, x2, y2]
             })
 
+        # ---------------------------------------------------------------------
+        # Scene-specific intelligence (SHibuya)
+        # ---------------------------------------------------------------------
+        intelligence = None
+        if active_scene == "shibuya":
+            _, frame_width = frame.shape[:2]
+
+            crowd_intel = crowd_analyzer.analyze(detections, frame_width)
+            loiter_intel = loiter_analyzer.analyze(detections, now=time.time())
+
+            # optional lightweight unsafe behaviour: person <-> car proximity
+            persons = [d for d in detections if d["class_name"] == "person" and d["confidence"] > 0.15]
+            cars = [d for d in detections if d["class_name"] in ("car", "truck", "bus", "motorcycle")]
+
+            conflict_alerts = _near_miss(persons, cars, px_threshold=70.0)
+
+            intelligence = {
+                "crowd": crowd_intel,
+                "loitering": loiter_intel,
+                "safety": {
+                    "alerts": conflict_alerts,
+                    "alert_count": len(conflict_alerts)
+                }
+            }
+
         payload = {
             "scene": active_scene,
             "timestamp": time.time(),
             "num_detections": len(detections),
             "classes": class_counts,
-            "detections": detections
+            "detections": detections,
+            "intelligence": intelligence
         }
 
         try:
             requests.post(FRAME_ENDPOINT, json=payload, timeout=1)
         except Exception:
             pass
+
 
         # ---------------------------------------------------------------------
         # Draw + send frame
