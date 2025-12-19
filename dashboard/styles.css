@@ -195,7 +195,7 @@ body {
 .crowd-bar-fill {
   height: 100%;
   width: 0%;
-  background:var_(--accent-green);
+  background: var(--accent-green);
   transition: width 0.4s ease, background-color 0.4s ease;
 }
 
@@ -260,25 +260,38 @@ body {
 .intel-alert {
   margin: 10px 12px;
   padding: 10px 12px;
-  border-radius: 6px;
-  background: rgba(255, 92, 92, 0.12);
-  border: 1px solid rgba(255, 92, 92, 0.4);
-  color: #ffb3b3;
+  border-radius: 8px;
   font-size: 13px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.06);
+  color: var(--text-main);
 }
 
 .intel-alert-header {
-  font-weight: 600;
-  margin-bottom: 4px;
+  font-weight: 650;
+  margin-bottom: 6px;
 }
 
 .intel-alert-body {
   font-size: 12px;
-  color: #ffdede;
+  color: #d7dde7;
 }
 
 .intel-alert--hidden {
   display: none;
+}
+
+/* Variants */
+.intel-alert--danger {
+  background: rgba(255, 92, 92, 0.12);
+  border-color: rgba(255, 92, 92, 0.40);
+  color: #ffd0d0;
+}
+
+.intel-alert--amber {
+  background: rgba(244, 196, 48, 0.12);
+  border-color: rgba(244, 196, 48, 0.45);
+  color: #fff0bf;
 }
 
 /* ================= VIDEO ================= */

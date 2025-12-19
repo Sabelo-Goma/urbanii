@@ -29,8 +29,9 @@ class HighwayAnalyzer:
         # Trend
         trend = "stable"
         if len(self.history) >= 6:
-            recent = sum(list(self.history)[-3:]) / 3
-            earlier = sum(list(self.history)[-6:-3]) / 3
+            history_list = list(self.history)
+            recent = sum(history_list[-3:]) / 3
+            earlier = sum(history_list[-6:-3]) / 3
             if earlier > 0 and recent > earlier * 1.2:
                 trend = "increasing"
             elif earlier > 0 and recent < earlier * 0.8:

@@ -6,6 +6,8 @@ from ultralytics import YOLO
 from intelligence.crowd import CrowdAnalyzer
 from intelligence.loiter import LoiterAnalyzer
 from intelligence.highway import HighwayAnalyzer
+from intelligence.industrial import IndustrialAnalyzer
+
 
 
 # =============================================================================
@@ -33,6 +35,8 @@ loiter_analyzer = LoiterAnalyzer(
 
 highway_analyzer = HighwayAnalyzer()
 
+industrial_analyzer = IndustrialAnalyzer()
+
 # -----------------------------------------------------------------------------
 # Scene → Source mapping
 # -----------------------------------------------------------------------------
@@ -44,7 +48,7 @@ SCENE_SOURCES = {
     },
     "industrial": {
         "type": "file",
-        "url": "BigBuckBunny.mp4"
+        "url": "assets/industrial_demo.mp4"
     },
     "highway": {
         "type": "file",
@@ -262,12 +266,16 @@ def main():
             traffic_intel = highway_analyzer.analyze(detections, frame_height)
             intelligence["traffic"] = traffic_intel
 
-        # === Industrial: placeholder (no extra intelligence yet) ===
+        # === Industrial: (vehicle detection+woker safety suggestions)) ===
         elif active_scene == "industrial":
-            # keep empty for now
-            pass
+            frame_height, frame_width = frame.shape[:2]
+            try:
+                industrial_intel = industrial_analyzer.analyze(detections, frame_height,frame_width)
+            except TypeError:
+                industrial_intel = industrial_analyzer.analyze(detections, frame_height)
 
-        # if nothing was added, keep schema clean
+            intelligence["industrial"]= industrial_intel
+        
         if not intelligence:
             intelligence = None
 

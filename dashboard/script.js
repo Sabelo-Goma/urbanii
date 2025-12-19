@@ -26,6 +26,9 @@ const trafficTrendEl = document.getElementById("traffic-trend");
 const loiteringAlert = document.getElementById("loitering-alert");
 const loiteringDetails = document.getElementById("loitering-details");
 
+const industrialAlert = document.getElementById("industrial-alert");
+const industrialDetails = document.getElementById("industrial-details");
+
 yearEl.textContent = new Date().getFullYear();
 
 /* ================= STATUS ================= */
@@ -87,6 +90,31 @@ function showLoiteringAlert(loitering) {
 
 function hideLoiteringAlert() {
   loiteringAlert.classList.add("intel-alert--hidden");
+}
+
+/* ================= INDUSTRIAL ================= */
+
+function showIndustrialAlert(industrial) {
+  // Expecting something like:
+  // industrial = { risk: "normal"|"elevated", ppe_missing_count: n, alerts: [...] }
+  const risk = industrial?.risk ?? "unknown";
+  const missing = industrial?.ppe_missing_count;
+
+  if (typeof missing === "number") {
+    industrialDetails.textContent =
+      `Safety risk: ${risk}. PPE missing signals: ${missing}.`;
+  } else if (industrial?.message) {
+    industrialDetails.textContent = industrial.message;
+  } else {
+    industrialDetails.textContent =
+      `Safety risk: ${risk}. Potential PPE / proximity risk detected.`;
+  }
+
+  industrialAlert.classList.remove("intel-alert--hidden");
+}
+
+function hideIndustrialAlert() {
+  industrialAlert.classList.add("intel-alert--hidden");
 }
 
 /* ================= TRAFFIC ================= */
@@ -155,6 +183,7 @@ function refreshEvents() {
       let crowdIntel = null;
       let loiteringIntel = null;
       let trafficIntel = null;
+      let industrialIntel = null;
 
       const scene = sceneSelect.value;
 
@@ -174,6 +203,9 @@ function refreshEvents() {
 
         if (!trafficIntel && ev.intelligence?.traffic)
           trafficIntel = ev.intelligence.traffic;
+
+        if (!industrialIntel && ev.intelligence?.industrial)
+          industrialIntel = ev.intelligence.industrial;
 
         const row = document.createElement("tr");
         row.innerHTML = `
@@ -212,6 +244,28 @@ function refreshEvents() {
         trafficMeter.classList.add("hidden");
         resetTrafficMeter();
       }
+
+      // Industrial (Industrial only)
+      if (scene === "industrial") {
+        //hide other scene alerts)
+        crowdMeter.classList.add("hidden");
+        trafficMeter.classList.add("hidden");
+        resetCrowdMeter();
+        resetTrafficMeter();
+        hideLoiteringAlert();
+
+        //show safety banner if meaningful data//
+        const shouldShow =
+          industrialIntel &&
+          (industrialIntel.risk !== "elevated" ||
+           (Array.isArray(industrialIntel.alerts) && industrialIntel.alerts.length > 0) ||
+           (typeof industrialIntel.ppe_missing_count === "number" &&
+            industrialIntel.ppe_missing_count === "number" && industrialIntel.ppe_missing_count > 0));
+        
+        shouldShow ? showIndustrialAlert(industrialIntel) : hideIndustrialAlert();
+      } else {
+        hideIndustrialAlert() ;
+      }    
     })
     .catch(err => console.error("Failed to refresh events", err));
 }
@@ -244,6 +298,7 @@ sceneSelect.addEventListener("change", async () => {
   resetCrowdMeter();
   resetTrafficMeter();
   hideLoiteringAlert();
+  hideIndustrialAlert();
 });
 
 /* ================= RESET ================= */
@@ -255,6 +310,7 @@ resetBtn.onclick = () => {
   resetCrowdMeter();
   resetTrafficMeter();
   hideLoiteringAlert();
+  hideIndustrialAlert();
 };
 
 /* ================= LOOP ================= */
